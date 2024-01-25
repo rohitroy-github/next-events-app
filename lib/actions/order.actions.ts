@@ -3,6 +3,7 @@
 import {
   CheckoutOrderParams,
   CreateOrderParams,
+  GetOrdersByEventParams,
   GetOrdersByUserParams,
 } from "@/types";
 import {handleError} from "../utils";
@@ -11,6 +12,8 @@ import {redirect} from "next/navigation";
 import {connectToDatabase} from "../database";
 import Order from "../database/models/order.model";
 import User from "../database/models/user.model";
+import Event from "../database/models/event.model";
+import {ObjectId} from "mongodb";
 
 export const checkoutOrder = async (order: CheckoutOrderParams) => {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
@@ -62,6 +65,7 @@ export const createOrder = async (order: CreateOrderParams) => {
   }
 };
 
+// GET ORDERS BY USER
 export async function getOrdersByUser({
   userId,
   limit = 3,
@@ -96,6 +100,68 @@ export async function getOrdersByUser({
       data: JSON.parse(JSON.stringify(orders)),
       totalPages: Math.ceil(ordersCount / limit),
     };
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+// GET ORDERS BY EVENT
+export async function getOrdersByEvent({
+  searchString,
+  eventId,
+}: GetOrdersByEventParams) {
+  try {
+    await connectToDatabase();
+
+    if (!eventId) throw new Error("Event ID is required");
+    const eventObjectId = new ObjectId(eventId);
+
+    const orders = await Order.aggregate([
+      {
+        $lookup: {
+          from: "users",
+          localField: "buyer",
+          foreignField: "_id",
+          as: "buyer",
+        },
+      },
+      {
+        $unwind: "$buyer",
+      },
+      {
+        $lookup: {
+          from: "events",
+          localField: "event",
+          foreignField: "_id",
+          as: "event",
+        },
+      },
+      {
+        $unwind: "$event",
+      },
+      {
+        $project: {
+          _id: 1,
+          totalAmount: 1,
+          createdAt: 1,
+          eventTitle: "$event.title",
+          eventId: "$event._id",
+          buyer: {
+            $concat: ["$buyer.firstName", " ", "$buyer.lastName"],
+          },
+        },
+      },
+      {
+        $match: {
+          $and: [
+            {eventId: eventObjectId},
+            {buyer: {$regex: RegExp(searchString, "i")}},
+          ],
+        },
+      },
+    ]);
+
+    return JSON.parse(JSON.stringify(orders));
   } catch (error) {
     handleError(error);
   }
